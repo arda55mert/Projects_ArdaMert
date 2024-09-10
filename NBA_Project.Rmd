@@ -308,7 +308,6 @@ df_dependent <- complete_df[, c("player_name", "All_Star", "pick")]
 ```
 
 ```{r message=FALSE}
-# we have used ChatGPT to aid some parts of the code used in this section.
 library(corrplot)
 
 correlation_matrix <- cor(df_no_dependent)
