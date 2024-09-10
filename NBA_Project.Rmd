@@ -1,0 +1,730 @@
+---
+title: "Final Project & Arda Mert | Ryan Sullivan"
+author: "Arda Mert and Ryan Sullivan"
+date: "2024-04-29"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r message=FALSE, warning=FALSE}
+# load in libraries 
+library(tidyverse)
+library(ggplot2)
+library(readr) 
+library(gridExtra) 
+```
+
+**Data**
+
+```{r}
+# using the `read.csv` function to load data
+df = read.csv("../data/CollegeBasketballPlayers2009-2021.csv")
+all_star = read.csv("../data/final_data.csv")
+```
+
+This dataset is called "College Basketball 2009-2021 + NBA Advanced Stats," and details the season statistics for basketball players. The dataset can be found on Kaggle here: https://www.kaggle.com/datasets/adityak2003/college-basketball-players-20092021?select=CollegeBasketballPlayers2009-2021.csv. Specifically, we will be using the 'CollegeBasketballPlayers2009-2021.csv,' which only includes information about college basketball seasons. Each entry corresponds to a player's season and their cumulative and average statistics over the course of that season, and each column corresponds to a different statistic. A player may have multiple entries if they played multiple college seasons.
+
+In addition, we synthesized this dataset with the "NBA All Star Players and Stats 1980-2022" dataset, in order to determine which players later went on to be NBA all stars. The data can be found on Kaggle here: https://www.kaggle.com/datasets/ethankeyes/nba-all-star-players-and-stats-1980-2022.
+
+**Research Question**
+
+In professional basketball, scouting players is crucial for a franchise's sustained success. Based on their previous playing career, often just one year at college, scouts are required to assess talent and potential for long term NBA value. Jobs are won and lost based on a scout's ability to accurately extrapolate a 1-4 year college career into pro success. Based on this premise, we would like to explore how college statistics translate into NBA value. Specifically, we are looking to predict: 1. How early will a player get drafted, based on their college statistics? and 2. Which players will eventually become NBA all-stars, based on their college statistics? The first question addresses perceived value from college stats at the time of the draft, and the second question addresses actual long term success. In addition, we would like how well the data's dimensionality can be reduced with PCA, and use the reduced dimensionality to create simpler models.
+
+We predict that our model will be able to predict draft pick moderately well, as we are essentially working off of the same information as NBA talent scouts by looking at their college career. However, we also believe that it might prove difficult to predict All-stars, as there are so few all stars and they depend greatly on outside career factors (ie the situation they get drafted to, quality of player development, etc).
+
+**Variables of Interest**
+
+The main variables of interest are 'All_Star' and 'pick'. All_Star will be our target variable for the classification task, using college stats to classify players as likely all stars or likely non-all stars. Pick will be the target variable for the regression task. The independent variables of interest will be all college stats available.
+
+## Data Cleaning & Preparation
+
+```{r}
+# removing rows where the 'pick' column contains missing values
+df <- df[!is.na(df$pick), ]
+
+# filtering the data to keep only the most recent 'year' for each player
+df <- df %>%
+    group_by(player_name) %>%
+    filter(year == max(year)) %>%
+    ungroup()
+```
+
+Firstly, our focus is on college basketball players who were drafted into the NBA, because our dependent variable for analysis is 'pick', and therefore, the players must have a value in the 'pick' column. Secondly, since some players may have multiple years of college play before entering the NBA, we are specifically interested in their final college year. We believe the final year is crucial as it likely represents their peak performance, which would have been most influential in their draft evaluation.
+
+```{r}
+# extracting and storing unique full names of players who became All-Stars in or 
+# after the year 2009 from the 'all_star' dataframe
+all_star <- all_star %>%
+  mutate(full_name = paste(first, last))
+
+all_star <- all_star %>% 
+            filter(year >= 2009)
+
+all_stars_name <- unique(all_star$full_name)
+
+# adding a new column 'All_Star' to our 'df' dataframe; assigning "1" if 'player_name' 
+# matches any name in 'all_stars_name', otherwise "0"
+df <- df %>%
+  mutate(All_Star = if_else(player_name %in% all_stars_name, "1", "0"))
+```
+
+```{r}
+# removing the redundant columns
+df <- df %>%
+  select(-ht, -num, -pid, -type, -X.1, -year)
+```
+
+```{r}
+# renaming columns in our dataframe for clarity and to facilitate easier manipulation in future steps
+df <- df %>%
+  rename(
+    RecruitRank = Rec.Rank,
+    RimShotsMade = rimmade,
+    RimShotsAttempted = rimmade.rimmiss,
+    MidrangeShotsMade = midmade,
+    MidrangeShotsAttempted = midmade.midmiss,
+    RimShotsPercentage = rimmade..rimmade.rimmiss.,
+    MidrangeShotsPercentage = midmade..midmade.midmiss.,
+    DunksMade = dunksmade,
+    DunksAttempted = dunksmiss.dunksmade,
+    DunksPercentage = dunksmade..dunksmade.dunksmiss.
+  )
+```
+
+```{r}
+# reordering the columns of our dataframe
+new_order <- c(1, 61, 60, 2:59)
+df <- df[, new_order]
+```
+
+```{r}
+# categorizing players by specific positions
+df <- df %>%
+    mutate(X = case_when(
+        player_name == "Jordan Hill" ~ "PF/C", player_name == "Chase Budinger" ~ "Wing F",
+        player_name == "Eric Maynor" ~ "Pure PG", player_name == "Earl Clark" ~ "Stretch 4",
+        player_name == "Dante Cunningham" ~ "PF/C", player_name == "Jermaine Taylor" ~ "Wing G",
+        player_name == "Goran Suton" ~ "PF/C", player_name == "Derrick Brown" ~ "Wing F",
+        player_name == "Tyler Hansbrough" ~ "PF/C", player_name == "Danny Green" ~ "Wing G",
+        player_name == "Lester Hudson" ~ "Scoring PG", player_name == "Chinemelu Elonu" ~ "PF/C",
+        player_name == "Taj Gibson" ~ "PF/C", player_name == "Jack McClinton" ~ "Scoring PG",
+        player_name == "DeJuan Blair" ~ "PF/C", player_name == "DaJuan Summers" ~ "Wing F",
+        player_name == "Jeff Teague" ~ "Pure PG", player_name == "James Johnson" ~ "Wing F",
+        player_name == "Stephen Curry" ~ "Scoring PG", player_name == "Gerald Henderson" ~ "Wing G",
+        player_name == "Robert Vaden" ~ "Wing G", player_name == "Jonny Flynn" ~ "Pure PG",
+        player_name == "Terrence Williams" ~ "Combo G", player_name == "Jon Brockman" ~ "PF/C",
+        player_name == "Darren Collison" ~ "Pure PG", player_name == "Ty Lawson" ~ "Pure PG",
+        player_name == "Wayne Ellington" ~ "Wing G", player_name == "DeMarre Carroll" ~ "Wing F",
+        player_name == "Sam Young" ~ "Wing F", player_name == "Hasheem Thabeet" ~ "C",
+        player_name == "Austin Daye" ~ "Stretch 4", player_name == "Robert Dozier" ~ "PF/C",
+        player_name == "Blake Griffin" ~ "PF/C", player_name == "Ahmad Nivins" ~ "PF/C",
+        player_name == "Nick Calathes" ~ "Pure PG", player_name == "Toney Douglas" ~ "Combo G",
+        player_name == "James Harden" ~ "Scoring PG", player_name == "Taylor Griffin" ~ "PF/C",
+        player_name == "Jodie Meeks" ~ "Wing G", player_name == "Jrue Holiday" ~ "Pure PG",
+        player_name == "DeMar DeRozan" ~ "Wing G", player_name == "Trey Thompkins" ~ "Stretch 4",
+        player_name == "Tyreke Evans" ~ "Combo G", player_name == "Tyshawn  Taylor" ~ "Pure PG",
+        player_name == "MarShon Brooks" ~ "Wing G", player_name == "Robbie John Hummel" ~ "Stretch 4",
+        player_name == "A.J. Price" ~ "Pure PG", player_name == "Patty Mills" ~ "Scoring PG",
+        player_name == "Jeff Ayres" ~ "PF/C", player_name == "Byron Mullens" ~ "PF/C",
+        TRUE ~ X # retaining the current value if none of the conditions are met
+    ))
+```
+
+Unfortunately, the dataset for players from the 2009 NBA Draft contains some missing entries, particularly in the column detailing their best playing positions. That's why to address these missing values, we have utilized our knowledge of the NBA to assign appropriate positions to these players. Additionally, we sought confirmation for our classifications by consulting with ChatGPT to verify the accuracy of our predictions regarding the players' positions.
+
+```{r message=FALSE}
+library(mice)
+
+# setting up imputation, to not include position in prediction
+imp <- mice(df, maxit = 0)
+imp$predictorMatrix[, "All_Star"] <- 0
+imp$predictorMatrix[, "pick"] <- 0
+
+# imputing data with PMM
+imputed_data <- mice(df, m = 1, maxit = 5, method = 'pmm', predictorMatrix = imp$predictorMatrix, 
+                     seed = 123)
+ 
+# creating a complete dataset from the multiple imputations
+# using the first imputed dataset as an example
+complete_df <- complete(imputed_data, 1)
+```
+
+In preparation for PCA, it is essential to address other missing values present in the dataset. That's why to handle these gaps, we have employed Predictive Mean Matching (PMM) as the method for imputation. After completing the multiple imputation process, we select the first imputed dataset.
+
+``` {r}
+# doing an ordinal-encoding
+levels <- c("Fr", "So", "Jr", "Sr")
+complete_df$yr <- factor(complete_df$yr, levels = levels, ordered = TRUE)
+complete_df$yr <- as.integer(complete_df$yr)
+```
+
+Since categorical columns are not suitable for PCA, it is necessary to convert some categorical columns into numerical ones. Initially, we transform the 'yr' column, which categorizes players as Freshman, Sophomore, Junior, and Senior, into integers using ordinal encoding. We believe this approach is appropriate as these classifications have a meaningful and inherent order.
+
+```{r}
+# one-hot encoding the 'X' column
+oneHotEncoder <- model.matrix(~ X - 1, data = complete_df)
+
+# converting the matrix to a dataframe
+df_oneHot <- as.data.frame(oneHotEncoder)
+
+# adding column names for clarity 
+colnames(df_oneHot) <- gsub("X", "", colnames(df_oneHot))
+
+# combining our dataframe with the new one-hot encoded columns
+complete_df <- cbind(complete_df, df_oneHot)
+
+# removing the original column
+complete_df <- complete_df %>%
+  select(-X)
+```
+
+Secondly, for the 'X' column, which defines players' suitable playing positions and lacks a meaningful order, ordinal encoding is not appropriate. Therefore, we utilize one-hot encoding to convert this categorical data into numerical format. We believe this method allows each position to be represented as a separate binary variable, suitable for PCA.
+
+```{r}
+# finding the most occurring schools
+top_schools <- complete_df %>%
+  count(team, sort = TRUE) %>%
+  slice_head(n = 10) %>%
+  pull(team)
+
+# creating an ordinal encoding where top ten schools get 10 to 1, others get 0
+complete_df <- complete_df %>%
+  mutate(team = case_when(
+    team == top_schools[1] ~ 10,
+    team == top_schools[2] ~ 9,
+    team == top_schools[3] ~ 8,
+    team == top_schools[4] ~ 7,
+    team == top_schools[5] ~ 6,
+    team == top_schools[6] ~ 5,
+    team == top_schools[7] ~ 4,
+    team == top_schools[8] ~ 3,
+    team == top_schools[9] ~ 2,
+    team == top_schools[10] ~ 1,
+    TRUE ~ 0
+  ))
+
+# finding the most occurring conferences
+top_conferences <- complete_df %>%
+  count(conf, sort = TRUE) %>%
+  slice_head(n = 10) %>%
+  pull(conf)
+
+# creating an ordinal encoding where top ten conferences get 10 to 1, others get 0
+complete_df <- complete_df %>%
+  mutate(conf = case_when(
+    conf == top_conferences[1] ~ 10,
+    conf == top_conferences[2] ~ 9,
+    conf == top_conferences[3] ~ 8,
+    conf == top_conferences[4] ~ 7,
+    conf == top_conferences[5] ~ 6,
+    conf == top_conferences[6] ~ 5,
+    conf == top_conferences[7] ~ 4,
+    conf == top_conferences[8] ~ 3,
+    conf == top_conferences[9] ~ 2,
+    conf == top_conferences[10] ~ 1,
+    TRUE ~ 0
+  ))
+```
+
+Lastly, to convert school/conference names into numerical values, we first assess the frequency of each school/conference in the dataset. Afterwards, we rank them based on occurrence. Lastly, in the ordinal encoding, the most frequent ones get the higher values, reflecting their importance or prominence, which makes our data suitable for PCA.
+
+## Exploratory Data Analysis (EDA)
+
+```{r}
+# categorizing the 'pick' column into groups based on their numeric range
+complete_df$group <- cut(complete_df$pick, breaks=c(0, 10, 20, 30, 40, 50, 60), 
+                labels=c('1-10', '11-20', '21-30', '31-40', '41-50', '51-60'), right=TRUE)
+
+# creating a plot
+ggplot(complete_df, aes(x = group, fill = factor(All_Star))) +
+  geom_bar(position = "dodge") +
+  labs(x = "Draft Pick Range", y = "Count", fill = "All Star") +
+  scale_y_continuous(breaks = seq(0, 110, by = 10)) +
+  ggtitle("Distribution of All Stars by Draft Pick Range")
+```
+
+In our initial exploratory data analysis, we examined the relationship between two dependent variables: 'pick' and 'All-Star' status. We believe this graph revealed that a player's likelihood of becoming an All-Star decreases exponentially with a lower draft pick. Specifically, in the analysis, approximately 30 players picked in the first range became All-Stars. Surprisingly, this number dropped to about 10 in the second range, 5 in the third, less than 5 in the fourth, and only 1 in the sixth.
+
+```{r}
+# doing a Multivariate Analysis for dependent variable: "pick"
+P1 <- ggplot(complete_df, aes(x = pick, y = bpm)) +
+  geom_point() +
+  geom_smooth(method = "lm", se = FALSE) +
+  labs(x = "Draft Picks", y = "Plus/Minus", title = "Plus/Minus vs. Draft Picks")
+
+P2 <- ggplot(complete_df, aes(x = group, y = pts)) +
+  geom_boxplot() +
+  labs(x = "Draft Pick Range", y = "Points Scored", title = "Points Scored by Draft Pick Range")
+
+complete_df <- complete_df %>%
+  select(-group)
+
+grid.arrange(P1, P2, nrow = 1, ncol = 2)
+```
+
+Before developing our model, it was essential to confirm a fundamental assumption of linear regression: the linearity between independent variables and the dependent variable. We selected two independent variables at random for this analysis. First of all, the player plus/minus variable demonstrated a clear trend where higher draft picks (1 to 10) generally recorded higher plus/minus values, indicating a decrease in plus/minus as the draft order increases. Secondly, PPG (Points per Game) also showed that players with higher draft picks tend to score more points in college. We believe these observations confirm the linearity assumption required for Linear Regression.
+
+```{r}
+# doing a Multivariate Analysis for dependent variable: "All-Star"
+P1 <- ggplot(complete_df, aes(x = yr, fill = All_Star)) +
+  geom_bar(position = "stack") +
+  labs(x = "Years in College", y = "Count", fill = "All-Star Status") +
+  ggtitle("Years in College vs. All-Star Status") 
+
+P2 <- ggplot(complete_df, aes(x = All_Star, y = usg, fill = All_Star)) +
+  geom_boxplot() +
+  labs(title = "All-Star by Usage Rate", y = "Usage Rate", x = "All-Star") +
+  scale_y_continuous(breaks = seq(15, 35, by = 5))
+
+# filtering the dataframe to only include rows from the top 10 conferences
+filtered_df <- df %>%
+  filter(conf %in% top_conferences)
+
+P3 <- ggplot(filtered_df, aes(x = conf, fill = All_Star)) +
+  geom_bar(position = "stack") +
+  labs(x = "Conference", y = "Count", fill = "All-Star Status") +
+  ggtitle("Conference vs. All-Star Status") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+P4 <- ggplot(complete_df, aes(x = All_Star, y = adjoe, fill = All_Star)) +
+  geom_boxplot() +
+  labs(title = "All-Star by Offensive Efficiency", y = "Offensive Efficiency", x = "All-Star") +
+  scale_y_continuous(breaks = seq(90, 150, by = 10))
+
+grid.arrange(P1, P2, P3, P4, nrow = 2, ncol = 2)
+```
+
+In our multivariate analysis for logistic regression, we investigated how various independent variables influence the likelihood of a player becoming an All-Star, which revealed several key insights:
+
+Duration in College: players who spent less time in college were more likely to achieve All-Star status in the NBA, suggesting a shorter college tenure may be associated with higher professional potential or earlier readiness for the NBA.
+
+Usage Rate: players with a higher usage rate in college (over 25%) were more likely to become All-Stars than those with a usage rate below 25%, indicating that players who are more central to their college teams' play tend to perform better in the NBA.
+
+College Conference: the analysis showed that most future All-Stars played in major conferences such as the SEC, Big 12, Pac-10, and ACC, implying that the level of competition and visibility in these conferences might play a role in preparing players for All-Star careers.
+
+Offensive Efficiency: similar to usage rate, players who became NBA All-Stars had significantly higher offensive efficiency in college compared to those who did not become All-Stars, suggesting that efficient scoring in college is a strong predictor of future success in the NBA.
+
+## Principal Component Analysis (PCA) 
+```{r}
+# creating a new data frame without the 'All_Star' & 'pick' column (the dependent variables)
+df_no_dependent <- complete_df[, !(names(complete_df) %in% c("player_name", "All_Star", "pick"))]
+df_dependent <- complete_df[, c("player_name", "All_Star", "pick")]
+```
+
+```{r message=FALSE}
+# we have used ChatGPT to aid some parts of the code used in this section.
+library(corrplot)
+
+correlation_matrix <- cor(df_no_dependent)
+
+high_correlation_pairs <- which((abs(correlation_matrix) < 0.05) & upper.tri(correlation_matrix), 
+                                arr.ind = TRUE)
+
+if (length(high_correlation_pairs) == 0) {
+} else {
+    # extracting the variable names from the indices
+    variable_names <- unique(c(colnames(correlation_matrix)[high_correlation_pairs[, 1]], 
+                         colnames(correlation_matrix)[high_correlation_pairs[, 2]]))
+    
+    # counting how many times each variable appears in the high correlation pairs
+    variable_counts <- table(unlist(apply(high_correlation_pairs, 1, function(idx) {
+        c(colnames(correlation_matrix)[idx[1]], colnames(correlation_matrix)[idx[2]])
+    })))
+
+    # sorting to get the most frequent variables
+    sorted_variable_counts <- sort(variable_counts, decreasing = TRUE)
+
+    # selecting the top variables
+    top_variables <- names(sorted_variable_counts)[1:min(5, length(sorted_variable_counts))]
+
+    cat("most recurring variables in pairs with correlation lower than 0.05:\n")
+    print(top_variables)
+}
+
+# removing the columns that have small correlations 
+df_no_dependent <- df_no_dependent %>%
+  select(-`Wing F`, -DunksPercentage, -GP, -team, -`Stretch 4`)
+```
+
+In PCA analysis, a critical assumption is that there should be substantial correlations among features to effectively reduce dimensionality. If the correlations between variables are near zero, PCA will likely be ineffective in capturing significant variance. That's why, we first identified pairs of variables with correlations lower than 0.05, indicating a weak relationship. Subsequently, we removed the five variables that appeared most frequently in these low-correlation pairs from the dataset.
+
+```{r message=FALSE}
+# running the Bartlett's Test
+library(psych)
+bartlett <- cortest.bartlett(df_no_dependent)
+print(bartlett)
+```
+
+We believe a p-value of 0 from Bartlett's Test suggests strong evidence against the null hypothesis, which states that the variables in the dataset are uncorrelated. Shortly, these significant correlations imply the presence of underlying structures and patterns that PCA can effectively utilize to reduce dimensions.
+
+```{r}
+# running the Kaiser-Meyer-Olkin (KMO) Measure
+kmo <- KMO(df_no_dependent)
+print(kmo)
+
+# removing the column which has KMO < 0.50
+df_no_dependent <- df_no_dependent %>%
+  select(-`Combo G`)
+```
+
+After conducting a Kaiser-Meyer-Olkin (KMO), the overall MSA for our dataset was found to be 0.79, indicating a good suitability for PCA. However, the 'Combo G' feature had a KMO value of 0.45, reflecting poor correlation with other variables. So, to improve the analysis, we removed 'Combo G' from the dataset.
+
+```{r}
+# scaling our dataset before PCA
+df_no_dependent <- scale(df_no_dependent)
+```
+
+```{r}
+# fitting our dataset into preliminary PCA
+pca <- principal(df_no_dependent, rotate = "varimax")
+```
+
+```{r}
+# arranging the eigenvalues from our PCA
+print(sort(pca$values, decreasing = T))
+
+# creating a Scree Plot
+scree <- data.frame(PC = 1:length(pca$values), Eigenvalue = pca$values)
+ggplot(scree, aes(x = PC, y = Eigenvalue)) +
+  geom_line() +
+  geom_point() +
+  geom_hline(yintercept=1, linetype = 'dashed') +
+  scale_x_continuous(breaks = seq(1, 60, by = 3)) +
+  labs(x = 'Principal Component') +
+  ggtitle("Scree Plot") 
+```
+
+According to the Kaiser-Guttman Rule, which advises retaining all components with eigenvalues greater than 1, our Scree Plot analysis suggests retaining thirteen components for PCA to capture the significant variance within the dataset.
+
+```{r}
+# doing a Parallel Analysis
+ParallelAnalysis <- fa.parallel(df_no_dependent, fa = 'pc')
+```
+
+While the Kaiser-Guttman Rule suggested retaining thirteen components, our Parallel Analysis, which compares eigenvalues to those of random data, indicates that only nine components are adequate.
+
+```{r}
+# fitting our data set into final PCA after selecting a rotation method
+pca_final <- principal(df_no_dependent, nfactors = 9, rotate = "varimax")
+```
+
+```{r}
+# checking if our residuals are normally distributed
+corMatrix <- cor(df_no_dependent )
+resids <- factor.residuals(corMatrix, pca_final$loadings)
+lower_resid <- resids[lower.tri(resids)]
+hist(lower_resid, main="Histogram of PCA Residuals", xlab="Residuals")
+```
+
+We believe the normal distribution of residuals from our PCA suggests that the number of components we selected was sufficient.
+
+```{r}
+# extracting eigenvalues
+eigenvalues <- pca_final$values
+
+# calculating proportion of variance explained
+explained_variance <- eigenvalues / sum(eigenvalues)
+cumulative_variance <- cumsum(explained_variance)
+
+ggplot(data = data.frame(Component = 1:length(explained_variance), 
+                         CumulativeVariance = cumulative_variance), 
+       aes(x = Component, y = CumulativeVariance)) +
+  geom_line(colour = "red") +
+  geom_point(colour = "red") +
+  labs(title = "PCA Explained Variance",
+       y = "Cumulative Proportion of Variance Explained",
+       x = "Principal Component") +
+  geom_vline(xintercept = 9, linetype = "dashed", color = "blue") +
+  geom_hline(yintercept = 0.785, linetype = "dashed", color = "green")
+```
+
+Finally, graph shows that the nine principal components selected effectively capture 78.5% of the total variance in the dataset. 
+
+## Linear Regression
+```{r}
+# extracting the scores from the PCA, combining these scores with the 'df_dependent' 
+# dataframe to form 'final_data'
+scores <- pca_final$scores
+final_data <- cbind(scores, df_dependent)
+
+# creating 'df_linearRegression' by removing 'player_name' and 'All_Star', 
+# preparing it for Linear Regression
+df_linearRegression <- final_data %>%
+  select(-player_name, -All_Star)
+```
+
+```{r message=FALSE}
+library(caret)
+
+# splitting our dataframe into train & test
+set.seed(123)  # for reproducibility
+trainIndex <- createDataPartition(df_linearRegression$pick, p = .8, list = FALSE)
+train <- df_linearRegression[trainIndex,]
+test <- df_linearRegression[-trainIndex,]
+```
+
+```{r}
+# building up our Linear Regression Model
+linearModel <- lm(pick ~ ., data = train)
+linearModel
+
+summary(linearModel)
+```
+
+We believe the model summary indicates that 'PC2', 'PC3', 'PC4', 'PC7', and 'PC8' have a significant impact on determining a player's draft pick, as their P-Values are well below 0.05. Conversely, 'PC1', 'PC5', 'PC6', and 'PC9' show P-Values significantly above 0.05, suggesting they do not significantly affect the draft pick number.
+
+```{r}
+# removing the insignificant Principal Components
+df_linearRegression <- df_linearRegression %>%
+  select(-RC1, -RC5, -RC6, -RC9)
+
+# again splitting our dataframe into train & test
+set.seed(123)  # for reproducibility
+trainIndex <- createDataPartition(df_linearRegression$pick, p = .8, list = FALSE)
+train <- df_linearRegression[trainIndex,]
+test <- df_linearRegression[-trainIndex,]
+```
+
+```{r}
+# building up our new Linear Regression Model
+linearModel <- lm(pick ~ ., data = train)
+linearModel
+
+summary(linearModel)
+```
+
+Equation of our Linear Regression: pick = 29.679 - 3.046(PC2) - 2.551(PC3) - 3.861(PC4) + 5.317(PC7) + 2.140(PC8)
+
+After refining our Linear Regression Model by removing insignificant principal components, all remaining components now show significant p-values below 0.05. Also, the model's R-Squared is 0.213, which means it explains approximately 21.3% of the variance in the dependent variable. We consider this level of explanatory power satisfactory due to the complexity of our dataset.
+
+```{r}
+# checking two key assumptions: linearity and homoscedasticity
+plot(linearModel, which = 1)
+```
+
+```{r}
+# creating a histogram for our model's residuals
+residuals <- residuals(linearModel)
+
+ggplot() +
+  geom_histogram(aes(x = residuals), binwidth = 5, fill = "yellow", color = "black") +
+  labs(title = "Histogram of Residuals", x = "Residuals", y = "Frequency") 
+
+# testing our model's residuals' normality
+shapiro.test(linearModel$residuals)
+```
+
+```{r}
+# checking whether residuals of the model are approximately normally distributed
+plot(linearModel, which = 2)
+```
+
+We believe the diagnostic plots for our linear regression model indicate that the homoscedasticity assumption is met, as evidenced by the even scatter in the Residuals vs. Fitted Graph and the symmetric, bell-shaped Histogram of Residuals. Also, the Normal Q-Q Plot shows good alignment with the reference line, suggesting a normal distribution of residuals. However, the Shapiro-Wilk Normality Test indicates potential deviations from normality with a P-Value of 2.791e-05, although the histogram still supports the assumption of normality for practical purposes.
+
+```{r}
+# extracting the scores of our linearModel
+predictions <- predict(linearModel, newdata = test)
+
+mse <- mean((test$pick - predictions)^2)
+rmse <- sqrt(mse)
+mae <- mean(abs(test$pick - predictions))
+
+print(paste("MSE:", mse))
+print(paste("RMSE:", rmse))
+print(paste("MAE:", mae))
+```
+
+Root Mean Squared Error of 15.3 for our model indicates that the predictions deviate from the actual draft picks by an average of approximately 15 picks. 
+
+```{r}
+set.seed(9) # setting seed for reproducibility
+
+# sampling some random indices from the scores dataset
+prediction_indices <- sample(1:nrow(scores), size = 10, replace = FALSE)
+
+# making a new dataframe with the selected indices from the PCA scores
+new_data <- as.data.frame(scores[prediction_indices, ])
+
+# making predictions with our model
+predictions <- predict(linearModel, new_data)
+
+# combining the corresponding actual pick values with the predictions
+df_final <- data.frame(
+  Actual_Pick = complete_df$pick[prediction_indices], 
+  Predicted_Pick = predictions
+)
+
+# calculating the percentage difference between actual vs. prediction
+df_final$Percent_Difference <- with(df_final, abs(Actual_Pick - Predicted_Pick) / Actual_Pick * 100)
+
+df_final
+```
+
+After testing on ten random NBA players, our model demonstrates better predictive accuracy for players drafted in the middle range, specifically picks 20-40. However, its accuracy decreases for players selected at the high end (top picks) and low end (last picks) of the draft.
+
+## Logistic Regression
+```{r}
+# creating 'df_logisticRegression' by removing 'player_name' and 'pick', preparing it for Logistic Regression
+df_logisticRegression <- final_data %>%
+  select(-player_name, -pick)
+
+df_logisticRegression$All_Star <- factor(df_logisticRegression$All_Star, levels = c(0, 1))
+```
+
+```{r}
+set.seed(55)  # for reproducibility
+trainIndex <- createDataPartition(df_logisticRegression$All_Star, p = .80, list = FALSE)
+train <- df_logisticRegression[trainIndex,]
+test <- df_logisticRegression[-trainIndex,]
+```
+
+```{r}
+# we have used ChatGPT to aid some parts of the code used in this section.
+library(ROSE)
+
+# setting seed for reproducibility
+set.seed(11)
+
+# applying oversampling using ROSE to get a roughly balanced dataset
+data_balanced <- ovun.sample(All_Star ~ ., data = train, method = "over", N = 900)$data
+
+# manually adjusting to get exactly 500 '0s' and 400 '1s'
+data_balanced_0s <- data_balanced[data_balanced$All_Star == "0", ]
+data_balanced_1s <- data_balanced[data_balanced$All_Star == "1", ]
+
+# ensuring we have enough samples to select from, then sampling down if necessary
+if (nrow(data_balanced_0s) > 500) {
+  data_balanced_0s <- data_balanced_0s[sample(nrow(data_balanced_0s), 500), ]
+}
+if (nrow(data_balanced_1s) > 400) {
+  data_balanced_1s <- data_balanced_1s[sample(nrow(data_balanced_1s), 400), ]
+}
+
+# combining the balanced datasets
+train_balanced <- rbind(data_balanced_0s, data_balanced_1s)
+
+table(train$All_Star)
+table(train_balanced$All_Star)
+```
+
+Because of the rarity of All-Stars (50 1s vs 593 0s), addressing the class imbalance in predicting NBA All-Stars is essential to improve model accuracy. Initially, oversampling adjusts the total dataset to 900 samples to approximate balance. Afterwards, we refine this by manually ensuring a precise count of 500 non-All-Stars ('0') and 400 All-Stars ('1'), sampling down as needed to correct any over-representation and create a more effective training set.
+
+```{r}
+# building up our Logistic Regression Model
+logistic_model <- glm(All_Star ~ ., family = binomial, data = train_balanced)
+logistic_model
+
+summary(logistic_model)
+```
+
+After conducting an initial Logistic Regression, we found that the 'PC1', 'PC3', and 'PC8' do not significantly predict whether a player will become an All-Star since their p-values are significantly greater than 0.05.
+
+```{r}
+# calculating Cook's Distances for our new model to identify outliers
+cooks.distances <- cooks.distance(logistic_model)
+
+# plotting Cook's Distances to determine potential outliers
+plot(cooks.distances, main = "Cook's Distance")
+abline(h = 4/(nrow(train_balanced)), col = "lawngreen")
+
+# identifying indices of outliers
+outliers <- which(cooks.distances > (4/(nrow(train_balanced))))
+
+# creating a new dataframe excluding outliers
+train_balanced <- train_balanced[-outliers, ]
+```
+
+Before fitting our data into the final model, we removed outliers using Cook's Distance.
+
+```{r}
+# removing the insignificant Principal Components
+train_balanced <- train_balanced %>%
+  select(-RC1, -RC3, -RC8)
+
+test <- test %>%
+  select(-RC1, -RC3,-RC8)
+```
+
+```{r}
+# building up our new Logistic Regression Model
+logistic_model <- glm(All_Star ~ ., family = binomial, data = train_balanced)
+logistic_model
+
+summary(logistic_model)
+```
+
+We believe the remaining Principal Components are statistically significant in predicting whether a player will become an All-Star. Specifically, PC2, PC4, PC5, and PC9 positively influence the likelihood of becoming an All-Star, suggesting that these components capture beneficial traits. Conversely, PC6 and PC7 are negatively associated with All-Star likelihood, indicating that the attributes these components represent may hinder a player's prospects of becoming an All-Star in the NBA based on their college statistics.
+
+```{r}
+# determining the odds ratios
+exp(coef(logistic_model))
+```
+
+Similarly, the odds ratios reveal that RC2, RC4, RC5, and RC9 significantly increase the odds of becoming an All-Star, enhancing the likelihood by 61.94%, 43.66%, 48.84%, and 45.33%, respectively, for a unit increase. Conversely, RC6 and RC7 decrease the likelihood of All-Star status by 31.43% and 23.30%, respectively, for a unit increase.
+
+```{r message=FALSE}
+library(margins)
+
+# determining the AMEs
+AME <- margins(logistic_model)
+summary(AME)
+
+# checking the multicollinearity
+library(car)
+vif(logistic_model)
+```
+
+After looking at the AMEs, positive AMEs for RC2, RC4, RC5, and RC9 increase the likelihood of a player becoming an NBA All-Star by 9.93%, 7.47%, 8.20%, and 7.70%, respectively. Conversely, RC6 and RC7 decrease this probability by 7.77% and 5.47%, respectively. Lastly, our model meets the multicollinearity assumption, evidenced by low Variance Inflation Factors (VIFs) for all predictors.
+
+```{r}
+# predicting probabilities and actual outcomes
+test_predictions <- factor(ifelse(predict(logistic_model, newdata = test, type = 
+                                            "response") > 0.50, 1, 0), levels = c(0, 1))
+
+# calculating accuracy and confusion matrix
+accuracy <- mean(test$All_Star == test_predictions)
+cat("Accuracy:", accuracy, "\n")
+print(confusionMatrix(test_predictions, test$All_Star, positive = "1"))
+
+# displaying a mosaic plot
+library(vcd)
+mosaicplot(table(test$All_Star, test_predictions), main = "Mosaic Plot of Model Predictions", color = TRUE) 
+
+```
+
+Upon testing our model on the test dataset, it achieved an accuracy of 75.8% and correctly identified 6 out of 10 actual All-Stars, demonstrating its effectiveness in predicting players with the potential of becoming an All-Star.
+
+## Discussion
+
+### PCA
+The PCA was generally successful, with the scree plot suggesting the retention of 13 components due to eigenvalues greater than 1. However, a more conservative approach based on parallel analysis recommended retaining only 9 components. These 9 components explained approximately 79% of the total variance, which is substantial but reflects the complexity and multidimensional nature of basketball performance metrics.
+
+### Linear Regression Model
+The model showed that while several PCA components (1, 5, 6, and 9) were not statistically significant, using the remaining five components yielded modestly better results than the benchmark prediction (arbitrarily guessing pick 30). Specifically, the RMSE of our model was 15.3, an improvement over the benchmark RMSE of 17.3. The MAE was also improved at 12.7 compared to the benchmark of 15. The model performed reasonably well for predicting middle-round draft picks (10-50) but was less accurate at identifying top-tier prospects and late-round picks.
+
+### Logistic Regression for All-Star Prediction
+Initially, the logistic regression model showed limited success, primarily due to the rarity of All-Star players which skewed the dataset towards non-All-Stars. The initial model achieved 64% accuracy with only 50% recall and 11% precision. After implementing a strategy to oversample All-Stars, the results improved significantly to 76% accuracy, with an enhanced recall of 60% and precision of 18%. This adjustment indicates a potential pathway for improving predictive performance in highly imbalanced datasets.
+
+## Conclusion and Reflection
+The study aimed to explore the predictive power of college basketball statistics on professional success in the NBA, specifically focusing on draft pick position and All-Star achievements. The PCA demonstrated its utility by effectively reducing the dimensionality of our dataset, capturing the majority of the variance in fewer components and simplifying the subsequent modeling. This suggests that PCA is a suitable tool for dimensionality reduction in this context, though the decision on the number of components to retain requires careful consideration to balance information loss against model simplicity.
+
+The predictive models developed in this study showed moderate success. For draft picks, the linear regression model outperformed a basic benchmark but highlighted the challenges in accurately predicting extreme values, such as top picks. The logistic regression model for predicting All-Star players initially struggled due to class imbalance but showed improved results with the application of oversampling techniques.
+
+### Limitations
+The primary limitation of this study is the inherent unpredictability of long-term player success based on college statistics alone. External factors such as team fit, injuries, and player development post-draft play critical roles but were outside the scope of this analysis.
+
+### Future Research
+Future studies could incorporate additional predictors, such as player physical metrics (e.g., wingspan, vertical leap) or qualitative data (e.g., work ethic, psychological resilience). Exploring alternative dimensionality reduction techniques, such as t-SNE or UMAP, might also reveal different aspects of the data that could enhance predictive accuracy.
+
+In conclusion, while PCA proved to be an effective tool for reducing dimensionality in this dataset, the complexity of predicting NBA success from college statistics alone suggests that multi-faceted approaches and longitudinal data might be necessary to increase the robustness and accuracy of predictive models in sports analytics.
+
+**Citations**
+
+College Basketball 2009-2021 + NBA Advanced Stats. Kaggle. Aditya Kumar. Retrieved April 22, 2024, from https://www.kaggle.com/datasets/adityak2003/college-basketball-players-20092021?select=CollegeBasketballPlayers2009-2021.csv.
+
+NBA All Star Players and Stats 1980-2022. Kaggle. Ethan Keyes. Retrieved April 22, 2024, from https://www.kaggle.com/datasets/ethankeyes/nba-all-star-players-and-stats-1980-2022.
